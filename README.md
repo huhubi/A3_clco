@@ -29,7 +29,7 @@ with App Service.
 
     ```bash
     $ python3 -m venv venv
-    $ .\venv\Scripts\Activate  (Windows only)
+    $ .\.venv\Scripts\Activate  (Windows only)
     $ pip3 install -r requirements.txt
     ```
 
@@ -110,3 +110,5 @@ source=asset.FileAsset("app.py")
 ```
 
 This also turned out not to work, as the `app.py` file was not found in the deployment package.
+
+So I changed the approach and used the deployment via direct index.html and without flask.

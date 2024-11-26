@@ -4,11 +4,14 @@ import pulumi_azure_native.resources as resource
 import pulumi_azure_native.sql as sql
 import pulumi_azure_native.storage as storage
 import pulumi_azure_native.web as web
-from pulumi import Config, Output, asset
-from pulumi_azure_native.storage import BlobContainer, PublicAccess
+from pulumi import Config, Output, asset, export
+from pulumi_azure_native.storage import (BlobContainer, PublicAccess,
+                                         StorageAccount)
 
-# Set username and configuration
+# Set the username for the SQL server
 username = "pulumi"
+
+# Retrieve the SQL password from the configuration
 config = Config()
 pwd = config.require("sqlPassword")
 
@@ -22,23 +25,31 @@ storage_account = storage.StorageAccount(
     kind=storage.Kind.STORAGE_V2,
     sku=storage.SkuArgs(name=storage.SkuName.STANDARD_LRS))
 
-# Create a Blob container
-storage_container = BlobContainer(
-    "appservice-container",
-    account_name=storage_account.name,
+# Create an App Service plan
+app_service_plan = web.AppServicePlan(
+    "appservice-asp",
     resource_group_name=resource_group.name,
-    public_access=PublicAccess.NONE
-)
+    kind="App",
+    sku=web.SkuDescriptionArgs(
+        tier="Free",
+        name="F1",
+    ))
 
-# Upload the Flask application code to the storage account
+# Create a storage container
+storage_container = BlobContainer(
+    "appservice-c",
+    account_name=storage_account.name,
+    public_access=PublicAccess.NONE,
+    resource_group_name=resource_group.name)
+
+# Upload the application code to the storage container
 blob = storage.Blob(
-    "appservice-app",
+    "appservice-b",
     resource_group_name=resource_group.name,
     account_name=storage_account.name,
     container_name=storage_container.name,
     type=storage.BlobType.BLOCK,
-    source=asset.FileAsset("app.py")
-)
+    source=asset.FileArchive("wwwroot"))
 
 # Generate a SAS token for the blob
 blob_sas = storage.list_storage_account_service_sas_output(
@@ -53,19 +64,16 @@ blob_sas = storage.list_storage_account_service_sas_output(
     content_type="application/json",
     cache_control="max-age=5",
     content_disposition="inline",
-    content_encoding="deflate"
-)
+    content_encoding="deflate")
 
 # Construct the signed blob URL
 signed_blob_url = Output.concat(
     "https://", storage_account.name, ".blob.core.windows.net/",
     storage_container.name, "/",
     blob.name, "?",
-    blob_sas.service_sas_token
-)
+    blob_sas.service_sas_token)
 
-# Use WEBSITE_RUN_FROM_PACKAGE app setting to deploy from the signed URL
-# Create Application Insights
+# Create an Application Insights resource
 app_insights = insights.Component(
     "appservice-ai",
     application_type=insights.ApplicationType.WEB,
@@ -73,41 +81,69 @@ app_insights = insights.Component(
     ingestion_mode="applicationInsights",
     resource_group_name=resource_group.name)
 
-
-# Create an App Service plan
-app_service_plan = web.AppServicePlan(
-    "appservice-asp",
+# Create a SQL server
+sql_server = sql.Server(
+    "appservice-sql",
     resource_group_name=resource_group.name,
-    kind="Linux",
-    reserved=True,
-    sku=web.SkuDescriptionArgs(
-        tier="Free",
-        name="B1",
+    administrator_login=username,
+    administrator_login_password=pwd,
+    version="12.0")
+
+# Create a SQL database
+database = sql.Database(
+    "appservice-db",
+    resource_group_name=resource_group.name,
+    server_name=sql_server.name,
+    sku=sql.SkuArgs(
+        name="S0",
     ))
 
-# Deploy the Flask application as a web app
+# Create a connection string for the SQL database
+connection_string = Output.concat(
+    "Server=tcp:", sql_server.name, ".database.windows.net;initial ",
+    "catalog=", database.name,
+    ";user ID=", username,
+    ";password=", pwd,
+    ";Min Pool Size=0;Max Pool Size=30;Persist Security Info=true;")
+
+# Deploy the application as a web app
 app = web.WebApp(
-    "appservice-flask",
+    "appservice-as",
     resource_group_name=resource_group.name,
     server_farm_id=app_service_plan.id,
     site_config=web.SiteConfigArgs(
-        linux_fx_version="PYTHON|3.09",
         app_settings=[
-            web.NameValuePairArgs(name="WEBSITE_RUN_FROM_PACKAGE", value=signed_blob_url),
             web.NameValuePairArgs(name="APPINSIGHTS_INSTRUMENTATIONKEY", value=app_insights.instrumentation_key),
-            web.NameValuePairArgs(name="SCM_DO_BUILD_DURING_DEPLOYMENT", value="true"),
-        ]
+            web.NameValuePairArgs(name="APPLICATIONINSIGHTS_CONNECTION_STRING",
+                                  value=app_insights.instrumentation_key.apply(
+                                      lambda key: "InstrumentationKey=" + key
+                                  )),
+            web.NameValuePairArgs(name="ApplicationInsightsAgent_EXTENSION_VERSION", value="~2"),
+            web.NameValuePairArgs(name="WEBSITE_RUN_FROM_PACKAGE", value=signed_blob_url)],
+        connection_strings=[web.ConnStringInfoArgs(
+            name="db",
+            type="SQLAzure",
+            connection_string=connection_string,
+        )]
     )
 )
 
-
-# Export outputs
+# Export the web app URL
 pulumi.export("web_app_url", pulumi.Output.concat("http://", app.default_host_name))
+
+# Export the SCM web app URL
 pulumi.export("scm_web_app_url", pulumi.Output.concat("http://", app.default_host_name.apply(lambda name: name.replace(".azurewebsites.net", ".scm.azurewebsites.net"))))
+
+# Export the log tail command
 pulumi.export("log_tail_command", pulumi.Output.all(app.name, resource_group.name).apply(lambda args: f"az webapp log tail --name {args[0]} --resource-group {args[1]}"))
+
+# Export the web SSH URL
 pulumi.export("web_ssh_url", pulumi.Output.concat("https://", app.default_host_name.apply(lambda name: name.replace(".azurewebsites.net", ".scm.azurewebsites.net")), "/webssh/host"))
-pulumi.export("deploy_command", pulumi.Output.all(app.name, resource_group.name).apply(lambda args: f"az webapp deploy --resource-group {args[1]} --name {args[0]} --src-path app.py --type zip"))
-pulumi.export("blob_url", signed_blob_url)
 
 # Log the web app URL to the info column
 app.default_host_name.apply(lambda url: pulumi.log.info(f"Web App URL: http://{url}"))
+
+# Export the endpoint URL
+export("endpoint", app.default_host_name.apply(
+    lambda endpoint: "https://" + endpoint
+))
