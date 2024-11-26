@@ -83,3 +83,21 @@ with App Service.
         </body>
     </html>
     ```
+## Found issues
+
+https://learn.microsoft.com/en-us/azure/app-service/deploy-run-package 
+
+### Refactored Deployment Approach
+
+#### Original Implementation
+The original file used `asset.AssetArchive` to package and deploy the application as a ZIP file:
+
+```python
+source=asset.AssetArchive({"app.py": asset.FileAsset("app.py")})
+```
+
+#### Adapted Implementation
+The adapted file directly uses `asset.FileAsset` to upload `app.py` without zipping:
+
+```python
+source=asset.FileAsset("app.py")
