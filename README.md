@@ -42,7 +42,7 @@ with App Service.
 1. Define SQL Server password (make it complex enough to satisfy Azure policy):
 
     ```bash
-    $ pulumi config set --secret sqlPassword <value>
+    $ pulumi config set --secret sqlPassword GanzGeheim123!
     ```
 
 1. Run `pulumi up` to preview and deploy changes:
@@ -71,7 +71,7 @@ with App Service.
         </body>
     </html>
     ```
-1. If pulumi is messed up:
+1. Get the endpoint:
 
     ```bash
     $ pulumi stack output endpoint
@@ -83,6 +83,12 @@ with App Service.
         </body>
     </html>
     ```
+   
+1. If pulumi is messed up:
+   ```bash
+    $ pulumi cancel
+    ```
+
 ## Found issues
 
 https://learn.microsoft.com/en-us/azure/app-service/deploy-run-package 
@@ -101,3 +107,6 @@ The adapted file directly uses `asset.FileAsset` to upload `app.py` without zipp
 
 ```python
 source=asset.FileAsset("app.py")
+```
+
+This also turned out not to work, as the `app.py` file was not found in the deployment package.
